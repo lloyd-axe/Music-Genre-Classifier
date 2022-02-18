@@ -1,7 +1,0 @@
-.gitignore
-*.csv
-*.json
-checkpoints/
-.ipynb_checkpoints/
-Test.ipynb
-__pycache__/
