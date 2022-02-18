@@ -1,0 +1,146 @@
+import os
+import math
+import json
+import librosa
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.utils import to_categorical
+from sklearn.model_selection import train_test_split
+from keras.callbacks import ModelCheckpoint, EarlyStopping, CSVLogger
+from tensorflow.keras.layers import BatchNormalization, Conv2D, Dense, Dropout, Flatten, MaxPool2D
+
+class ModelBuilderModule:  
+    @staticmethod
+    def prepare_data(
+        data_path, 
+        json_path = 'data.json', 
+        sr = 22050, 
+        duration = 3, 
+        n_segments = 5, 
+        n_mfcc = 13, 
+        n_fft = 2048, 
+        hop_len = 512):
+        
+        data ={'mapping' : [],'mfcc' : [],'labels' : []}
+        samp_p_track = sr * duration
+        samp_p_seg = int(samp_p_track / n_segments)
+        mfcc_p_seg = math.ceil(samp_p_seg / hop_len)
+        
+        #walk in data_path
+        for i, (dirpath, dirname, filenames) in enumerate(os.walk(data_path)):
+            if dirpath is not data_path:
+                label = dirpath.split('\\')[-1]
+                data['mapping'].append(label)
+                print(f'Processing {label} - {len(filenames)}x...')
+                for file in filenames:
+                    file_path = os.path.join(dirpath, file)
+                    signal, sr = librosa.load(file_path, sr = sr)
+                    for s in range(n_segments):
+                        s_samp = samp_p_seg * s
+                        f_samp = s_samp + samp_p_seg
+
+                        mfcc = librosa.feature.mfcc(
+                            y = signal[s_samp:f_samp], sr = sr, n_mfcc = n_mfcc, 
+                            n_fft = n_fft, hop_length = hop_len)
+                        mfcc = mfcc.T
+                        if len(mfcc) == mfcc_p_seg:
+                            data['mfcc'].append(mfcc.tolist())
+                            data['labels'].append(i-1)
+        with open(json_path, 'w') as fp:
+            json.dump(data, fp, indent=4)
+        return data
+    
+    @staticmethod      
+    def load_JSON(json_path):
+        with open(json_path, 'r') as fp:
+            data = json.load(fp)
+        return data
+    
+    @staticmethod   
+    def split_data(x_raw, y_raw, test_size = 0.5, val_set = False):
+        inputs = {}
+        x = np.array(x_raw)
+        y = to_categorical(np.array(y_raw))
+        x_train, x_test, y_train, y_test = train_test_split(x, 
+                                                            y, 
+                                                            test_size = test_size)
+        
+        
+        if val_set:
+            x_train, x_val, y_train, y_val = train_test_split(x_train,
+                                                                y_train, 
+                                                                test_size = 0.05)
+            x_val = np.expand_dims(x_val, axis=3)
+
+        x_train = np.expand_dims(x_train, axis=3)
+        x_test = np.expand_dims(x_test, axis=3)
+
+        inputs['x_train'] = x_train
+        inputs['x_test'] = x_test
+        inputs['x_val'] = x_val
+        inputs['y_train'] = y_train
+        inputs['y_test'] = y_test
+        inputs['y_val'] = y_val
+        return inputs
+    
+    @staticmethod
+    def createmodel(shape, n_class):
+        model = Sequential()
+        model.add(Conv2D(32, (3,3),
+                        activation='relu',
+                        input_shape=shape))
+        model.add(MaxPool2D((3, 3), strides=(2,2,), padding='same'))
+        model.add(BatchNormalization())
+        model.add(Conv2D(32, (3,3),
+                        activation='relu',
+                        input_shape=shape))
+        model.add(MaxPool2D((3, 3), strides=(2,2,), padding='same'))
+        model.add(BatchNormalization())
+        model.add(Conv2D(32, (2,2),
+                        activation='relu',
+                        input_shape=shape))
+        model.add(MaxPool2D((2, 2), strides=(2,2,), padding='same'))
+        model.add(BatchNormalization())
+        model.add(Flatten())
+        model.add(Dense(64,activation='relu'))
+        model.add(Dense(n_class, activation='softmax'))
+        model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
+        return model
+    
+    @staticmethod
+    def train(model, x, y, epochs, val_data = ([], []), modelname='model', plot = False):
+        if not os.path.isdir('checkpoints'):
+            os.mkdir('checkpoints')
+            print('checkpoints folder made')
+        CP_PATH = 'checkpoints/cp-{epoch:02d}-{val_categorical_accuracy:.2f}.hdf5'
+        checkpoints = ModelCheckpoint(CP_PATH, monitor='val_categorical_accuracy', verbose=1, save_best_only=True, mode='max')
+        early_stop = EarlyStopping(monitor='val_loss', patience=3, verbose=3)
+        log_csv = CSVLogger('test_log.csv', separator=',', append=False)
+        cb = [checkpoints, early_stop, log_csv]
+        if val_data != ([], []):
+            history = model.fit(x, y, epochs = epochs, callbacks = cb, validation_data = val_data)
+            
+            if plot:
+                plt.figure(figsize=(16,10))
+                val = plt.plot(history.epoch, 
+                        history.history['val_categorical_accuracy'],
+                        '--', 
+                            label='Val')
+                plt.plot(history.epoch, 
+                        history.history['categorical_accuracy'], 
+                        color=val[0].get_color(), 
+                        label='Train')
+                plt.plot(history.epoch, 
+                        history.history['loss'], 
+                        label='loss')
+                plt.plot(history.epoch, 
+                        history.history['val_loss'], 
+                        label='val_loss')
+                plt.xlabel('Epochs')
+                plt.ylabel('categorical_accuracy')
+                plt.legend()
+                plt.xlim([0,max(history.epoch)])
+        model.save(modelname + '.h5')
+        return model
+    
