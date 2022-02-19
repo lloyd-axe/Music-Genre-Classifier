@@ -36,6 +36,7 @@ class ModelBuilderModule:
                 for file in filenames:
                     file_path = os.path.join(dirpath, file)
                     signal, sr = librosa.load(file_path, sr = sr)
+                    print(signal.shape)
                     for s in range(n_segments):
                         s_samp = samp_p_seg * s
                         f_samp = s_samp + samp_p_seg
@@ -49,6 +50,7 @@ class ModelBuilderModule:
                             data['labels'].append(i-1)
         with open(json_path, 'w') as fp:
             json.dump(data, fp, indent=4)
+            print(f'Data saved to {json_path}')
         return data
     
     @staticmethod      
@@ -58,7 +60,7 @@ class ModelBuilderModule:
         return data
     
     @staticmethod   
-    def split_data(x_raw, y_raw, test_size = 0.5, val_set = False):
+    def split_data(x_raw, y_raw, test_size = 0.25, val_size = 0.2, val_set = False):
         inputs = {}
         x = np.array(x_raw)
         y = to_categorical(np.array(y_raw))
@@ -70,7 +72,7 @@ class ModelBuilderModule:
         if val_set:
             x_train, x_val, y_train, y_val = train_test_split(x_train,
                                                                 y_train, 
-                                                                test_size = 0.05)
+                                                                test_size = val_size)
             x_val = np.expand_dims(x_val, axis=3)
 
         x_train = np.expand_dims(x_train, axis=3)
@@ -105,19 +107,35 @@ class ModelBuilderModule:
         model.add(Flatten())
         model.add(Dense(64,activation='relu'))
         model.add(Dense(n_class, activation='softmax'))
-        model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
+        model.compile(optimizer='Adam', 
+                      loss='categorical_crossentropy', 
+                      metrics=['categorical_accuracy'])
         return model
     
     @staticmethod
-    def train(model, x, y, epochs, val_data = ([], []), modelname='model', plot = False):
+    def train(
+        model, 
+        x, 
+        y, 
+        epochs, 
+        val_data = ([], []), 
+        modelname='model', 
+        plot = False, 
+        earlyStop = True):
         if not os.path.isdir('checkpoints'):
             os.mkdir('checkpoints')
             print('checkpoints folder made')
-        CP_PATH = 'checkpoints/cp-{epoch:02d}-{val_categorical_accuracy:.2f}.hdf5'
-        checkpoints = ModelCheckpoint(CP_PATH, monitor='val_categorical_accuracy', verbose=1, save_best_only=True, mode='max')
-        early_stop = EarlyStopping(monitor='val_loss', patience=3, verbose=3)
+        check_model_path = 'checkpoints/mdl-{epoch:02d}-{val_categorical_accuracy:2f}.hdf5'
+        check_weights_path = "checkpoints/cp-{epoch:04d}.ckpt"
+        model_check = ModelCheckpoint(check_model_path, 
+                                      monitor='val_categorical_accuracy', 
+                                      verbose = 1, 
+                                      save_best_only = True, 
+                                      mode='max')
         log_csv = CSVLogger('test_log.csv', separator=',', append=False)
-        cb = [checkpoints, early_stop, log_csv]
+        cb = [model_check, log_csv]
+        if earlyStop:
+            cb.append(EarlyStopping(monitor='val_loss', patience=5, verbose=3))
         if val_data != ([], []):
             history = model.fit(x, y, epochs = epochs, callbacks = cb, validation_data = val_data)
             
